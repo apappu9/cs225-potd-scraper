@@ -20,12 +20,12 @@ const puppeteer = require('puppeteer');
     try {
       // wait for the logout button to appear (indicates successful login)
       await page.waitForSelector(logoutButtonSelector, { timeout: 10 * 60 * 1000 });
-      console.log("Successfully logged in! Please run 'node index.js' to scrape POTDs")
+      console.log("Successfully logged in! Please run 'npm run scrape' to scrape POTDs")
     } catch {
       console.log('Failed to login in time, please try again');
     }
   } else { // already logged in
-    console.log("You're already logged in. Please run 'node index.js' to scrape POTDs");
+    console.log("You're already logged in. Please run 'npm run scrape' to scrape POTDs");
   }
 
   await browser.close();
