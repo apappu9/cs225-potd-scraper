@@ -3,8 +3,12 @@ const path = require('path');
 const os = require('os');
 const { exec } = require('child_process');
 const puppeteer = require('puppeteer');
+const prompt = require('prompt');
 
-(async () => {
+main();
+
+async function main() {
+  // create a folder called 'potds' (this is where everything will be donwloaded to)
   try {
     await fs.promises.mkdir('potds');
   } catch(e) {
@@ -19,80 +23,151 @@ const puppeteer = require('puppeteer');
     }
   } catch(e) {
     console.log("Error: Please make sure you have git installed and it's added to PATH");
+    return;
   }
 
   const browser = await puppeteer.launch({
     headless: true, // set this to false to watch the browser as it scrapes
-    userDataDir: 'browser_data',
   });
 
   const [page] = await browser.pages();
 
-  await page.goto('https://prairielearn.engr.illinois.edu/pl/');
+  // attempt to login
+  try {
+    await login(page);
+  } catch(e) {
+    console.log(`Error: ${e}`);
+    browser.close();
+    return;
+  }
 
-  await page.screenshot({ path: path.resolve(__dirname, 'screenshot.png') });
+  const alreadyScrapedPOTDs = new Set(await fs.promises.readdir(path.resolve(__dirname, 'potds')));
+
+  await page.goto('https://prairielearn.engr.illinois.edu/pl/');
 
   const cs225CourseLinks = await page.$x("//a[contains(text(), 'CS 225')]");
   if (cs225CourseLinks.length !== 1) {
     console.log(`Error: You're either not logged in, not enrolled in CS 225, or enrolled in multiple CS 225s`);
   } else {
+    // click on the CS 225 course
     const cs225 = cs225CourseLinks[0];
     await Promise.all([
       cs225.click(),
       page.waitForNavigation(),
     ]);
 
+    // get list of all the problems of the day
     const potdList = await page.$x("//a[contains(text(), 'Problem of the Day')]");
-    for (const potd of potdList) {
-      // navigate to the page containing instructions and the download link
-      const href = await (await potd.getProperty('href')).jsonValue();
+    for (const [i, potd] of potdList.entries()) {
       const potdPage = await browser.newPage();
-      await potdPage.goto(href);
-      await Promise.all([
-        potdPage.click('#content .table td a[href^="/pl/course_instance/"]'),
-        potdPage.waitForNavigation(),
-      ]);
 
-      // set download location to the potds folder
-      const potdsPath = path.resolve(__dirname, 'potds');
-      await potdPage._client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: potdsPath });
+      try {
+        // navigate to the page containing instructions and the download link
+        const href = await (await potd.getProperty('href')).jsonValue();
+        await potdPage.goto(href);
+        await Promise.all([
+          potdPage.click('#content .table td a[href^="/pl/course_instance/"]'),
+          potdPage.waitForNavigation(),
+        ]);
 
-      // find the starter code shell script and download it
-      const shellScriptLink = await potdPage.$('a[download]');
-      const shellScriptLinkHref = await (await shellScriptLink.getProperty('href')).jsonValue();
-      const potdFilename = shellScriptLinkHref.slice(shellScriptLinkHref.lastIndexOf('/') + 1, shellScriptLinkHref.lastIndexOf('.'));
-      const shellScriptFilepath = path.resolve(__dirname, 'potds', `${potdFilename}.sh`);
-      await Promise.all([
-        waitForFile(shellScriptFilepath),
-        shellScriptLink.click(),
-      ]);
+        // set download location to the potds folder
+        const potdsPath = path.resolve(__dirname, 'potds');
+        await potdPage._client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: potdsPath });
 
-      // run the shell script and delete it
-      console.log(await execPromise(`sh ${shellScriptFilepath}`, {
-        cwd: potdsPath,
-        env: { PATH: `${process.env.PATH}${unixCommandsPath};` }
-      }));
-      await fs.promises.unlink(shellScriptFilepath);
+        // find the starter code shell script
+        const shellScriptLink = await potdPage.$('a[download]');
+        const shellScriptLinkHref = await (await shellScriptLink.getProperty('href')).jsonValue();
+        const potdFilename = shellScriptLinkHref.slice(shellScriptLinkHref.lastIndexOf('/') + 1, shellScriptLinkHref.lastIndexOf('.'));
 
-      // get the instructions content as html and save it to README.md
-      const instructionsHTML = await potdPage.$eval('.card-body.question-body', element => (
-        element.innerHTML.slice(0, element.innerHTML.indexOf('<h4>Upload Solution</h4>'))
-      ));
-      await fs.promises.writeFile(path.resolve(__dirname, 'potds', potdFilename, 'README.md'), instructionsHTML);
+        // skip scraping this potd if we already have it
+        if (alreadyScrapedPOTDs.has(potdFilename)) {
+          console.log(`Already scraped ${potdFilename}, skipping...`);
+        } else {
+          // download the shell script
+          const shellScriptFilepath = path.resolve(__dirname, 'potds', `${potdFilename}.sh`);
+          await Promise.all([
+            waitForFile(shellScriptFilepath),
+            shellScriptLink.click(),
+          ]);
 
-      // get the instructions content as text and save it to README.txt
-      const instructionsText = await potdPage.$eval('.card-body.question-body', element => (
-        element.innerText.slice(0, element.innerText.indexOf('Upload Solution'))
-      ));
-      await fs.promises.writeFile(path.resolve(__dirname, 'potds', potdFilename, 'README.txt'), instructionsText);
-      
-      console.log(`Successfully scraped ${potdFilename} to potds/${potdFilename}`);
+          // run the shell script and delete it
+          console.log(await execPromise(`sh ${shellScriptFilepath}`, {
+            cwd: potdsPath,
+            env: { PATH: `${process.env.PATH}${unixCommandsPath};` }
+          }));
+          await fs.promises.unlink(shellScriptFilepath);
+
+          // get the instructions content as html and save it to README.md
+          const instructionsHTML = await potdPage.$eval('.card-body.question-body', element => (
+            element.innerHTML.slice(0, element.innerHTML.indexOf('<h4>Upload Solution</h4>'))
+          ));
+          await fs.promises.writeFile(path.resolve(__dirname, 'potds', potdFilename, 'README.md'), instructionsHTML);
+
+          // get the instructions content as text and save it to README.txt
+          const instructionsText = await potdPage.$eval('.card-body.question-body', element => (
+            element.innerText.slice(0, element.innerText.indexOf('Upload Solution'))
+          ));
+          await fs.promises.writeFile(path.resolve(__dirname, 'potds', potdFilename, 'README.txt'), instructionsText);
+
+          console.log(`Successfully scraped ${potdFilename} to potds/${potdFilename}\n\n`);
+        }
+      } catch(e) {
+        console.log(e);
+        console.log(`Failed to scrape POTD #${i + 1}, please try opening the POTD manually and rerunning 'npm run scrape'`);
+        console.log("(note: when rerunning, only POTD's that failed to be scraped the previous time will be attempted again.\n\n");
+      }
+
       await potdPage.close();
     }
   }
 
+  console.log('Done.');
   await browser.close();
-})();
+}
+
+const promptPromise = schema => new Promise((resolve, reject) => {
+  prompt.get(schema, (err, result) => {
+    if (err) reject(err);
+    else resolve(result);
+  });
+});
+
+async function login(page) {
+  await page.goto('https://prairielearn.engr.illinois.edu/pl/');
+
+  const illinoisIconSelector = '.login-methods img[src="/images/illinois_logo.svg"]';
+  const logoutButtonSelector = 'a.btn[href="/pl/logout"]';
+  if (await page.$(illinoisIconSelector)) { // if not logged in
+    await page.click(illinoisIconSelector);
+
+    prompt.start();
+    console.log('Please enter your Illinois credentials (note: this is not saved anywhere, check the code):')
+    const { username, password } = await promptPromise([{
+      name: 'username',
+      required: true
+    }, {
+      name: 'password',
+      hidden: true,
+      required: true,
+    }]);
+
+    await page.type('#j_username', username);
+    await page.type('#j_password', password);
+
+    Promise.all([
+      page.click('input[type="submit"]'),
+      page.waitForNavigation(),
+    ]);
+
+    try {
+      // wait for the logout button to appear (indicates successful login)
+      await page.waitForSelector(logoutButtonSelector, { timeout: 10 * 60 * 1000 });
+      console.log("Successfully logged in!\n");
+    } catch {
+      throw 'Invalid Credentials';
+    }
+  }
+}
 
 function execPromise(command, options = {}) {
   return new Promise((resolve, reject) => {
