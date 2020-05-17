@@ -5,6 +5,8 @@ const { exec } = require('child_process');
 const puppeteer = require('puppeteer');
 const prompt = require('prompt');
 
+const HEADLESS = true; // set this to false to watch the browser as it scrapes
+
 main();
 
 async function main() {
@@ -27,7 +29,7 @@ async function main() {
   }
 
   const browser = await puppeteer.launch({
-    headless: true, // set this to false to watch the browser as it scrapes
+    headless: HEADLESS,
   });
 
   const [page] = await browser.pages();
@@ -36,7 +38,7 @@ async function main() {
   try {
     await login(page);
   } catch(e) {
-    console.log(`Error: ${e}`);
+    console.log(e);
     browser.close();
     return;
   }
@@ -164,7 +166,7 @@ async function login(page) {
       await page.waitForSelector(logoutButtonSelector, { timeout: 10 * 60 * 1000 });
       console.log("Successfully logged in!\n");
     } catch {
-      throw 'Invalid Credentials';
+      throw 'Error: Invalid Credentials';
     }
   }
 }

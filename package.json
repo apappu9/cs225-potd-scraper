@@ -4,8 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "scrape": "node index.js",
-    "login": "node login.js"
+    "scrape": "node index.js"
   },
   "author": "",
   "license": "ISC",
